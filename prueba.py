@@ -1,65 +1,186 @@
 import mss
 import cv2
 import numpy as np
-import pyautogui
 import time
+import ctypes
 import pydirectinput
+import win32api
+import win32con
+
+# Esto es vital para que las coordenadas de Python coincidan con los píxeles reales de Windows
+ctypes.windll.shcore.SetProcessDpiAwareness(1)
+
+
+def mover_mouse_absoluto(x, y):
+    """Mueve el mouse a coordenadas absolutas de la pantalla (Teletransporte)."""
+    ancho_pantalla = win32api.GetSystemMetrics(0)
+    alto_pantalla = win32api.GetSystemMetrics(1)
+
+    x_win = int((x / ancho_pantalla) * 65535)
+    y_win = int((y / alto_pantalla) * 65535)
+
+    ctypes.windll.user32.mouse_event(
+        win32con.MOUSEEVENTF_ABSOLUTE | win32con.MOUSEEVENTF_MOVE,
+        x_win, y_win, 0, 0)
+    time.sleep(0.05)
+
+
+def despertar_motor_juego():
+    """Forza un movimiento relativo de hardware (1 píxel) para que Roblox actualice su cámara 3D."""
+    # Mueve el ratón 1 píxel hacia la derecha y abajo
+    ctypes.windll.user32.mouse_event(win32con.MOUSEEVENTF_MOVE, 1, 1, 0, 0)
+    time.sleep(0.02)
+    # Lo regresa a su posición original
+    ctypes.windll.user32.mouse_event(win32con.MOUSEEVENTF_MOVE, -1, -1, 0, 0)
+    time.sleep(0.05)
+
+
+def clic_mouse(x, y):
+    """Hace un clic rápido asegurando que el juego registre la posición correcta."""
+    mover_mouse_absoluto(x, y)
+    despertar_motor_juego()  # TRUCO PARA EVITAR COORDENADAS FANTASMAS
+
+    ctypes.windll.user32.mouse_event(win32con.MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
+    time.sleep(0.05)
+    ctypes.windll.user32.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
+    time.sleep(0.05)
 
 
 def ejecutar_accion():
-    # mss es lo que toma la cpatura de pantalla
-    with mss.mss() as sct:
-        time.sleep(5)
-        # Esto camiba que mointor es importnate saber el del marcos
-        monitor = sct.monitors[1]
-        # esto convertimos la captura en un arrelgo de numPy
-        img = np.array(sct.grab(monitor))
 
-        # y le damos el formato de color que mejor maneja opencv
+    def darcClickTP(x, y):
+
+        mover_mouse_absoluto(x, y)
+        despertar_motor_juego()
+        pydirectinput.leftClick()
+        time.sleep(0.05)
+        pydirectinput.mouseDown(button='left')
+        time.sleep(1.5)
+        pydirectinput.mouseUp(button='left')
+
+    def detectarBanderaAzul(monitor):
+        while True:
+            image = obtenerCurrFrame(monitor)
+            height, width, _ = image.shape
+
+            # Ignorar el cielo o la UI superior
+            image[0:height // 3, 0:width] = 0
+
+            hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+            lower_ring = np.array([85, 100, 200])
+            upper_ring = np.array([100, 255, 255])
+
+            mask = cv2.inRange(hsv, lower_ring, upper_ring)
+            kernel = np.ones((5, 5), np.uint8)
+            mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
+
+            contours, _ = cv2.findContours(
+                mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+            largest_contour = None
+            max_area = 0
+
+            for cnt in contours:
+                area = cv2.contourArea(cnt)
+                if area > 100:
+                    x, y, w, h = cv2.boundingRect(cnt)
+                    aspect_ratio = float(w) / h
+                    if aspect_ratio > 1.5:
+                        if area > max_area:
+                            max_area = area
+                            largest_contour = cnt
+
+            if largest_contour is None:
+                pydirectinput.keyDown("right")
+                time.sleep(.65)
+                pydirectinput.keyUp("right")
+                pydirectinput.keyDown("up")
+                time.sleep(.5)
+                pydirectinput.keyUp("up")
+                pydirectinput.keyDown("left")
+                time.sleep(.65)
+                pydirectinput.keyUp("left")
+            else:
+                x, y, w, h = cv2.boundingRect(largest_contour)
+                bottom_center_x = x + w // 2
+                bottom_center_y = y + h
+
+                target_x = int(monitor["left"] + bottom_center_x)
+                target_y = int(monitor["top"] + bottom_center_y)
+
+                darcClickTP(target_x, target_y)
+                break
+
+    def obtenerCurrFrame(monitor):
+        img = np.array(sct.grab(monitor))
         frame = cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
+        return frame
+
+    with mss.mss() as sct:
+        monitor = sct.monitors[0]
+        frame = obtenerCurrFrame(monitor)
         imgaenHSV = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
 
-        # aqui defino el rango de azules que quiero
+        # Rango para el marco inicial
         azul_bajo = np.array([100, 150, 50])
         azul_alto = np.array([140, 255, 255])
-
-        # esto es lo que hcimos en el profe de python
         mascara = cv2.inRange(imgaenHSV, azul_bajo, azul_alto)
+
         contornos, _ = cv2.findContours(
             mascara, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
         if contornos:
-            # Encontrar el contorno más grande (el marco)
             c = max(contornos, key=cv2.contourArea)
-            # Obtener las coordenadas del centro
-
             M = cv2.moments(c)
             if M["m00"] != 0:
                 cX = int(M["m10"] / M["m00"])
                 cY = int(M["m01"] / M["m00"])
 
-                pydirectinput.moveTo(cX, cY, duration=0.2)
+                target_cX = int(monitor["left"] + cX)
+                target_cY = int(monitor["top"] + cY)
 
-                pydirectinput.leftClick()
-                pydirectinput.leftClick()
+                clic_mouse(target_cX, target_cY)
+                time.sleep(0.1)
+                clic_mouse(target_cX, target_cY)
+
                 time.sleep(2)
-                pydirectinput.moveTo(cX+5, cY+5, duration=0.2)
-                pydirectinput.leftClick()
-                time.sleep(10)
-                pydirectinput.keyDown('up')
-                time.sleep(2)  # El tiempo que desees mantener la tecla
-                pydirectinput.keyUp('up')
-                pydirectinput.keyDown('down')
-                time.sleep(2)  # El tiempo que desees mantener la tecla
-                pydirectinput.keyUp('down')
-                pydirectinput.keyDown('left')
-                time.sleep(2)  # El tiempo que desees mantener la tecla
-                pydirectinput.keyUp('left')
-                pydirectinput.keyDown('right')
-                time.sleep(2)  # El tiempo que desees mantener la tecla
-                pydirectinput.keyUp('right')
+                clic_mouse(target_cX + 5, target_cY + 5)
+
+                clic_mouse(target_cX, target_cY)
+
+                pydirectinput.keyDown("up")
+                time.sleep(3)
+                pydirectinput.keyUp("up")
+
+                pydirectinput.keyDown("down")
+                time.sleep(3)
+                pydirectinput.keyUp("down")
+
+                pydirectinput.keyDown("right")
+                time.sleep(.65)
+                pydirectinput.keyUp("right")
+
+                time.sleep(0.5)
+
+                detectarBanderaAzul(monitor)
+
         else:
-            print("No se encontró ningún marco azul en la pantalla.")
+            print("No se encontró ningún marco azul inicial en la pantalla.")
 
 
-ejecutar_accion()
+time.sleep(5)
+while True:
+    ejecutar_accion()
+    pydirectinput.keyDown("left")
+    time.sleep(.55)
+    pydirectinput.keyUp("left")
+    x = 0
+    while x < 3:
+        pydirectinput.keyDown("up")
+        time.sleep(2.5)
+        pydirectinput.keyUp("up")
+        pydirectinput.keyDown("down")
+        time.sleep(2.5)
+        pydirectinput.keyUp("down")
+        x = x+1
+    time.sleep(28)
